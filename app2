@@ -1,0 +1,248 @@
+# ==========================================
+# 1. Chargement des données
+# ==========================================
+import matplotlib.pyplot as plt
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+chemin_fichier = r"C:\Users\pc\Documents\apps\apps (1).csv"
+df = pd.read_csv(chemin_fichier)
+
+print("Colonnes :", df.columns)
+print("Dimensions :", df.shape)
+print(df.sample(5))
+
+# ==========================================
+# 2. Nettoyage et préparation des données
+# ==========================================
+# Suppression des colonnes non pertinentes
+df = df.drop(columns=["Last_Updated", "Android_Ver"])
+
+# Copie pour nettoyage
+df_apps_clean = df.copy()
+
+# Traitement des valeurs manquantes (Correction de la ligne parasite .loc['Rating'])
+df_apps_clean['Installs'] = (
+    df_apps_clean['Installs']
+    .astype(str)
+    .str.replace(r'[+,]', '', regex=True)
+    .str.strip()
+)
+df_apps_clean['Installs'] = pd.to_numeric(df_apps_clean['Installs'], errors='coerce')
+
+
+zero_installs = df_apps_clean['Installs'] == 0
+df_apps_clean.loc[zero_installs & df_apps_clean['Rating'].isna(), 'Rating'] = 0.0
+df_apps_clean["Rating"] = df_apps_clean["Rating"].fillna(
+    df_apps_clean["Rating"].median()
+)
+df_apps_clean["Type"] = df_apps_clean["Type"].fillna("Free")
+
+# Suppression des doublons
+df_apps_clean = df_apps_clean.drop_duplicates()
+
+# Conversion des types de données
+df_apps_clean["Reviews"] = pd.to_numeric(
+    df_apps_clean["Reviews"], errors="coerce"
+)
+
+# Nettoyage et conversion de la colonne Installs
+df_apps_clean["Installs"] = (
+    df_apps_clean["Installs"]
+    .astype(str)
+    .str.replace(r"[^\d]", "", regex=True)
+    .astype(int)
+)
+
+# Nettoyage et conversion de la colonne Price
+df_apps_clean["Price"] = (
+    df_apps_clean["Price"].astype(str).str.replace("$", "", regex=False).astype(float)
+)
+
+# Calcul des revenus estimés pour les applications payantes
+df_apps_clean["Revenue_Estimate"] = (
+    df_apps_clean["Price"] * df_apps_clean["Installs"]
+)
+
+# Vérification qu'il n'y a plus de NaN non désiré
+print("\nValeurs manquantes après nettoyage :")
+print(df_apps_clean.isna().sum())
+
+# ==========================================
+# 3. Analyses exploratoires
+# ==========================================
+# Apps les mieux notées
+top_rated = df_apps_clean.sort_values(
+    ["Rating", "Reviews"], ascending=[False, False]
+).head(10)
+print("\nTop 10 Apps mieux notées :")
+print(top_rated[["App", "Category", "Rating", "Reviews", "Installs"]])
+
+# Apps les plus volumineuses (Mo)
+print("\nTop 5 Apps les plus volumineuses (Mo) :")
+print(df_apps_clean.nlargest(5, "Size_MBs")[["App", "Category", "Size_MBs"]])
+
+# Apps avec le plus de critiques
+top50 = df_apps_clean.sort_values("Reviews", ascending=False).head(50)
+print("\nTop 10 Apps les plus évaluées :")
+print(top50[["App", "Reviews", "Type"]].head(10))
+
+# Top 10 Apps payantes par revenus estimés
+top_paid = df_apps_clean[df_apps_clean["Type"] == "Paid"].nlargest(
+    10, "Revenue_Estimate"
+)
+print("\nTop 10 Apps payantes générant le plus de revenus :")
+print(top_paid[["App", "Category", "Price", "Installs", "Revenue_Estimate"]])
+
+# ==========================================
+# 4. Graphiques individuels (Plotly)
+# ==========================================
+# Répartition du Content Rating (Donut Chart)
+ratings = df_apps_clean["Content_Rating"].value_counts().reset_index()
+ratings.columns = ["Content_Rating", "Count"]
+fig_pie = px.pie(
+    ratings,
+    values="Count",
+    names="Content_Rating",
+    title="Content Rating (Donut)",
+    hole=0.6,
+)
+fig_pie.update_traces(textposition="inside", textinfo="percent")
+fig_pie.show()
+
+# Nombre d'apps par catégorie
+fig_hist = px.histogram(
+    df_apps_clean, x="Category", title="Nombre d'apps par catégorie"
+)
+fig_hist.update_xaxes(categoryorder="total descending")
+fig_hist.show()
+
+# Téléchargements totaux par catégorie
+cat_installs = (
+    df_apps_clean.groupby("Category")["Installs"]
+    .sum()
+    .sort_values()
+    .reset_index()
+)
+fig_bar = px.bar(
+    cat_installs,
+    x="Installs",
+    y="Category",
+    orientation="h",
+    title="Installs par catégorie",
+    height=800,
+)
+fig_bar.show()
+
+# Concentration : Téléchargements vs Nombre d'apps
+cat_df = (
+    df_apps_clean.groupby("Category")
+    .agg(App_Count=("App", "count"), Installs=("Installs", "sum"))
+    .reset_index()
+)
+cat_df["Installs_per_App"] = cat_df["Installs"] / cat_df["App_Count"]
+
+fig_scatter = px.scatter(
+    cat_df,
+    x="App_Count",
+    y="Installs",
+    color="Category",
+    size="Installs",
+    hover_name="Category",
+    title="Installs vs Nombre d'apps",
+    log_y=True,
+    height=700,
+)
+fig_scatter.show()
+
+# ==========================================
+# 5. DASHBOARD FINAL INTERACTIF (Plotly)
+# ==========================================
+# Préparation des données synthétisées pour le tableau de bord
+cat_installs_top8 = (
+    df_apps_clean.groupby("Category")["Installs"].sum().nlargest(8).reset_index()
+)
+type_counts = df_apps_clean["Type"].value_counts().reset_index()
+type_counts.columns = ["Type", "Count"]
+content_counts = (
+    df_apps_clean["Content_Rating"].value_counts().head(5).reset_index()
+)
+content_counts.columns = ["Content_Rating", "Count"]
+top_revenue_8 = df_apps_clean[df_apps_clean["Type"] == "Paid"].nlargest(
+    8, "Revenue_Estimate"
+)
+
+# Configuration du Subplot 2x2
+dashboard = make_subplots(
+    rows=2,
+    cols=2,
+    subplot_titles=(
+        "Top 8 Catégories par Téléchargements",
+        "Répartition Apps Gratuites vs Payantes",
+        "Top 8 Apps Payantes (Revenus Estimés en $)",
+        "Distribution par Content Rating",
+    ),
+    specs=[
+        [{"type": "bar"}, {"type": "pie"}],
+        [{"type": "bar"}, {"type": "bar"}],
+    ],
+)
+
+# Subplot 1 : Top Catégories
+dashboard.add_trace(
+    go.Bar(
+        x=cat_installs_top8["Installs"],
+        y=cat_installs_top8["Category"],
+        orientation="h",
+        marker_color="#636efa",
+    ),
+    row=1,
+    col=1,
+)
+
+# Subplot 2 : Gratuites vs Payantes
+dashboard.add_trace(
+    go.Pie(
+        labels=type_counts["Type"],
+        values=type_counts["Count"],
+        hole=0.4,
+        marker_colors=["#00cc96", "#EF553B"],
+    ),
+    row=1,
+    col=2,
+)
+
+# Subplot 3 : Top Apps Payantes par Revenu
+dashboard.add_trace(
+    go.Bar(
+        x=top_revenue_8["App"],
+        y=top_revenue_8["Revenue_Estimate"],
+        marker_color="#ab63fa",
+    ),
+    row=2,
+    col=1,
+)
+
+# Subplot 4 : Content Rating Top 5
+dashboard.add_trace(
+    go.Bar(
+        x=content_counts["Content_Rating"],
+        y=content_counts["Count"],
+        marker_color="#FFA15A",
+    ),
+    row=2,
+    col=2,
+)
+
+# Layout global du Dashboard
+dashboard.update_layout(
+    height=800,
+    showlegend=False,
+    title_text="<b>Google Play Store Analytics Dashboard</b>",
+    title_x=0.5,
+    template="plotly_white",
+)
+
+dashboard.show()
